@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import ResolumeAPI
 from .const import DOMAIN
 from .coordinator import ResolumeCoordinator
+from .param_entity import ParamSubscriptionMixin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,28 +24,59 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: ResolumeCoordinator = data["coordinator"]
 
-    entities: list[NumberEntity] = [ResolumeBpmNumber(coordinator)]
+    entities: list[NumberEntity] = []
 
-    # Composition-level numbers (master level, audio volume, cross-fader) have
-    # been removed. Only global BPM is exposed now.
+    # Add BPM entity if initial data already available
+    _add_bpm_entity(coordinator, entities)
 
     if entities:
         async_add_entities(entities)
 
+    @callback
+    def _handle_new_data():
+        added = _add_bpm_entity(coordinator, entities)
+        if added:
+            async_add_entities(added)
 
-class ResolumeBpmNumber(CoordinatorEntity[ResolumeCoordinator], NumberEntity):
+    coordinator.async_add_listener(_handle_new_data)
+
+
+# ---------------------------------------------------------------------------
+# BPM entity with real-time subscription
+# ---------------------------------------------------------------------------
+
+
+class ResolumeBpmNumber(
+    ParamSubscriptionMixin, CoordinatorEntity[ResolumeCoordinator], NumberEntity
+):
     """Entity representing global BPM."""
 
     _attr_unique_id = "resolume_global_bpm"
-    _attr_name = "Resolume BPM"
+    _attr_name = "Composition BPM"
     _attr_has_entity_name = False
     _attr_native_unit_of_measurement = "BPM"
     _attr_native_min_value = 20
     _attr_native_max_value = 400
     _attr_native_step = 0.1
 
+    def __init__(self, coordinator: ResolumeCoordinator, param_id: int):
+        super().__init__(coordinator)
+        self._param_id = param_id
+        self._pending = None
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, "composition")},
+            "name": "Composition",
+            "manufacturer": "Resolume",
+            "model": "Composition",
+        }
+
+    # ------------------------------------------------------------------
     @property
     def native_value(self) -> float | None:  # type: ignore[override]
+        # Prefer last pushed value
+        if getattr(self, "_last_value", None) is not None:
+            return float(self._last_value)
+
         composition = self.coordinator.data or {}
         tempoc = composition.get("tempocontroller", {})
         return tempoc.get("tempo", {}).get("value")
@@ -55,8 +87,31 @@ class ResolumeBpmNumber(CoordinatorEntity[ResolumeCoordinator], NumberEntity):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper
 # ---------------------------------------------------------------------------
+
+
+@callback
+def _add_bpm_entity(
+    coordinator: ResolumeCoordinator, entities: list
+) -> list[NumberEntity]:
+    new: list[NumberEntity] = []
+    if any(isinstance(e, ResolumeBpmNumber) for e in entities):
+        return new
+
+    comp = coordinator.data or {}
+    tempo_param = comp.get("tempocontroller", {}).get("tempo")
+    if not tempo_param:
+        return new
+
+    param_id = tempo_param.get("id")
+    if param_id is None:
+        return new
+
+    entity = ResolumeBpmNumber(coordinator, param_id)
+    entities.append(entity)
+    new.append(entity)
+    return new
 
 
 @callback
