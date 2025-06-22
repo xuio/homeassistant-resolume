@@ -15,9 +15,10 @@ PLATFORMS: list[str] = [
     "switch",  # layer bypass
     "button",  # clip trigger, master controls
     "camera",  # clip previews
-    "number",  # BPM + master levels
+    "number",  # BPM (and misc numbers)
     "sensor",  # active clip indicators
     "select",  # mixing modes, crossfader group
+    "light",  # Opacity / master as dimmable lights
 ]
 
 

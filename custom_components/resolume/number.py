@@ -26,21 +26,15 @@ async def async_setup_entry(
     entities: list[NumberEntity] = []
     entities.append(ResolumeBpmNumber(coordinator))
 
-    # Add layer master numbers
-    _add_layer_master_numbers(coordinator, entities)
-
+    # Keep only BPM and crossfader numbers (others now lights)
     _add_composition_numbers(coordinator, entities)
-
-    _add_layergroup_master_numbers(coordinator, entities)
 
     if entities:
         async_add_entities(entities)
 
     @callback
     def _handle_new_data():
-        added = _add_layer_master_numbers(coordinator, entities)
-        added.extend(_add_composition_numbers(coordinator, entities))
-        added.extend(_add_layergroup_master_numbers(coordinator, entities))
+        added = _add_composition_numbers(coordinator, entities)
         if added:
             async_add_entities(added)
 
