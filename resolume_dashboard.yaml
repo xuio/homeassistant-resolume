@@ -1,98 +1,68 @@
-title: Resolume
-icon: mdi:video
 views:
-  - title: Arena
+  - title: Resolume
     path: resolume
-    type: panel
+    icon: mdi:video
+    theme: default
+    type: custom:grid-layout
+    layout:
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))
+      grid-auto-rows: minmax(120px, auto)
+      grid-gap: 8px
     cards:
-      ###################################################################
-      # TOP BAR GLOBAL CONTROLS
-      ###################################################################
-      - type: vertical-stack
-        cards:
-          - type: horizontal-stack
-            cards:
-              # Global BPM
-              - type: button
-                entity: number.resolume_bpm
-                name: BPM
-                show_state: true
-                tap_action:
-                  action: more-info
-              # Cross-fader
-              - type: custom:slider-entity-row
-                entity: number.resolume_composition_crossfader_phase
-                name: Crossfader
-              # Composition Master
-              - type: custom:slider-entity-row
-                entity: number.resolume_composition_master_level
-                name: Master
+      # ------------------------------------------------------------------
+      # Composition master controls
+      # ------------------------------------------------------------------
+      - type: entities
+        view_layout:
+          grid-column: span 4
+        title: Composition
+        show_header_toggle: false
+        entities:
+          - entity: light.resolume_composition_master
+            name: Master Opacity
+            type: custom:slider-entity-row
+          # add any additional composition-wide parameters here
 
-          #################################################################
-          # GRID PER LAYER (auto-generated)
-          #################################################################
+      # ------------------------------------------------------------------
+      # Layer 1  ----------------------------------------------------------
+      # ------------------------------------------------------------------
+      - type: custom:vertical-stack-in-card
+        title: Layer 1
+        view_layout:
+          grid-column: span 1
+        cards:
+          # Clips row – auto-generate all cameras that belong to layer 1
           - type: custom:auto-entities
-            show_empty: false
             card:
-              type: vertical-stack
+              type: horizontal-stack
+              cards: []  # populated automatically
             filter:
               include:
-                # Match one helper entity per layer to anchor a row
-                - domain: switch
-                  entity_id: "/.*_bypass$/"
-                  options:
-                    type: custom:horizontal-stack
-                    cards:
-                      #################################################
-                      # LEFT LAYER CONTROL COLUMN
-                      #################################################
-                      - type: vertical-stack
-                        cards:
-                          # Clear
-                          - type: button
-                            entity: button.{{entity.entity_id.split('.')[1].replace('_bypass','')}}_clear
-                            name: Clear
-                          # Bypass (this entity itself)
-                          - type: button
-                            entity: this.entity_id
-                            name: Bypass
-                            tap_action: toggle
-                          # Solo
-                          - type: button
-                            entity: switch.{{entity.entity_id.split('.')[1].replace('_bypass','')}}_solo
-                            name: Solo
-                            tap_action: toggle
-                          # Opacity
-                          - type: custom:slider-entity-row
-                            entity: number.{{entity.entity_id.split('.')[1].replace('_bypass','')}}_opacity
-                            name: Level
-                      #################################################
-                      # CLIP GRID FOR THIS LAYER
-                      #################################################
-                      - type: custom:auto-entities
-                        card:
-                          type: grid
-                          columns: 11
-                          square: false
-                        filter:
-                          include:
-                            - domain: button
-                              entity_id: "/button.clip_.*_trigger/"
-                              attributes:
-                                device_id: {{device_id(entity.entity_id)}}
-                              options:
-                                type: custom:button-card
-                                show_entity_picture: true
-                                entity_picture: |
-                                  [[[ const cid = entity.entity_id.split('_')[1]; return states[`camera.clip_${cid}_preview`]?.attributes.entity_picture; ]]]
-                                name: |
-                                  [[[ return entity.attributes.friendly_name.replace('Clip:','').trim(); ]]]
-                                tap_action:
-                                  action: call-service
-                                  service: button.press
-                                  service_data:
-                                    entity_id: '[[[ return entity.entity_id ]]]'
-                        sort:
-                          method: friendly_name
-            sort:
-              method: friendly_name
+                - domain: camera
+                  attributes:
+                    identifiers: '(resolume,layer_1)'
+              # Show preview as clickable thumbnails
+              card_mod:
+                style: |
+                  ha-card {
+                    --ha-card-border-width: 0;
+                  }
+
+          # Layer control row
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: switch.resolume_layer_1_bypass
+                name: Bypass (B)
+              - entity: switch.resolume_layer_1_solo
+                name: Solo (S)
+              - entity: light.resolume_layer_1_opacity
+                name: Opacity
+                type: custom:slider-entity-row
+              - entity: select.resolume_layer_1_blend_mode
+                name: Blend Mode
+
+      # ------------------------------------------------------------------
+      # Duplicate the previous block for additional layers (Layer 2, Layer 3 …)
+      # Simply update the layer number in entity IDs and titles.
+      # ------------------------------------------------------------------

@@ -7,9 +7,10 @@ This custom integration exposes a Resolume Arena/Avenue server to Home Assistant
 * Devices for every Layer, Layer-Group and the Composition
 * Entities
   * Clip trigger buttons and clip thumbnails (camera entities)
-  * Layer: Clear, Bypass, Solo, Opacity, Blend-mode
-  * Layer-Group: Clear, Solo, Bypass, Master level
-  * Composition: BPM, Crossfader, Master level
+  * Layer: Clear, Bypass (on = bypassed), Solo, Opacity, Blend-mode
+  * Layer-Group: Clear, Solo, Bypass (on = bypassed)
+  * Composition: BPM (number) and BPM Tap (button)
+  * Masters for each layer, group and the composition are exposed as light entities and support transitions
 
 ## Requirements
 
@@ -31,11 +32,13 @@ After a few seconds the integration will create the devices and entities.  All e
 
 ## Lovelace example
 
-A sample dashboard that resembles the Resolume web UI is provided in `resolume_dashboard.yaml`.  Import it as a YAML dashboard and ensure the following custom cards are installed from HACS:
+A sample dashboard is provided in `resolume_dashboard.yaml`. Import it as a YAML dashboard and ensure the following custom cards are installed from HACS:
 
 * `button-card`
 * `auto-entities`
 * `slider-entity-row`
+
+The top-bar now shows only the Composition BPM number (cross-fader and master sliders were removed).
 
 ## Troubleshooting
 

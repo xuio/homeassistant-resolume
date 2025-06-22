@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import math
 
-from homeassistant.components.light import ATTR_BRIGHTNESS, LightEntity, ColorMode
+from homeassistant.components.light import (
+    ATTR_BRIGHTNESS,
+    ATTR_TRANSITION,
+    LightEntity,
+    ColorMode,
+    LightEntityFeature,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -143,6 +151,7 @@ class _ResolumeParamLight(
 ):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_features = LightEntityFeature.TRANSITION
     _attr_should_poll = False
 
     def __init__(
@@ -169,6 +178,9 @@ class _ResolumeParamLight(
         self._value: float | None = None  # cache last known 0..1 value
         self._pending: float | None = None
 
+        # Task used when a fade (transition) is in progress
+        self._fade_task: asyncio.Task | None = None
+
     # ------------------------------------------------------------------
     @property
     def is_on(self) -> bool | None:
@@ -189,26 +201,73 @@ class _ResolumeParamLight(
         return ColorMode.BRIGHTNESS
 
     async def async_turn_on(self, **kwargs):
+        transition = float(kwargs.get(ATTR_TRANSITION, 0))
         level = kwargs.get(ATTR_BRIGHTNESS, BRIGHTNESS_MAX) / BRIGHTNESS_MAX
-        # 1.  update internal state FIRST
-        self._value = level
-        self._attr_is_on = level > 0
-        self._attr_brightness = int(level * BRIGHTNESS_MAX)
-        self.async_write_ha_state()  # 2. push state to UI
 
-        # 3.  then tell Resolume
-        await self.coordinator.resolume_api.async_set_parameter(self._param_id, level)
+        # Cancel any ongoing fade
+        if self._fade_task:
+            self._fade_task.cancel()
 
-        self._pending = level
+        await self._fade_to(level, transition)
 
     async def async_turn_off(self, **kwargs):
-        self._value = 0.0
-        self._attr_is_on = False
-        self._attr_brightness = 0
-        self.async_write_ha_state()
-        await self.coordinator.resolume_api.async_set_parameter(self._param_id, 0.0)
+        transition = float(kwargs.get(ATTR_TRANSITION, 0))
 
-        self._pending = 0.0
+        # Cancel any ongoing fade
+        if self._fade_task:
+            self._fade_task.cancel()
+
+        await self._fade_to(0.0, transition)
+
+    async def _fade_to(self, target: float, transition: float) -> None:
+        """Fade linearly to *target* over *transition* seconds."""
+
+        # Immediate change if no transition or same value requested
+        start_value = self._current_value() or 0.0
+        if transition <= 0 or start_value == target:
+            self._value = target
+            self._attr_is_on = target > 0
+            self._attr_brightness = int(target * BRIGHTNESS_MAX)
+            self.async_write_ha_state()
+            await self.coordinator.resolume_api.async_set_parameter(
+                self._param_id, target
+            )
+            self._pending = target
+            return
+
+        steps = max(int(transition * 25), 1)  # ~25 updates / second
+        step_time = transition / steps
+        delta = target - start_value
+
+        async def _run():
+            try:
+                for i in range(1, steps + 1):
+                    progress = i / steps  # 0..1
+                    eased = -(math.cos(math.pi * progress) - 1) / 2  # ease-in-out-sine
+                    value = start_value + delta * eased
+                    self._value = value
+                    self._attr_is_on = value > 0
+                    self._attr_brightness = int(value * BRIGHTNESS_MAX)
+                    self.async_write_ha_state()
+                    await self.coordinator.resolume_api.async_set_parameter(
+                        self._param_id, value
+                    )
+                    self._pending = value
+                    await asyncio.sleep(step_time)
+            except asyncio.CancelledError:
+                # Fade interrupted by another command
+                pass
+            finally:
+                self._fade_task = None
+
+        # Run the fade without blocking the service call
+        self._fade_task = self.hass.async_create_task(_run())
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle removal - cancel any running fade."""
+        if self._fade_task:
+            self._fade_task.cancel()
+        await super().async_will_remove_from_hass()
 
     # ------------------------------------------------------------------
     def _current_value(self):
