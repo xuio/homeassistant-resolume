@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import ResolumeAPI
 from .const import DOMAIN
 from .coordinator import ResolumeCoordinator
+from .param_entity import ParamSubscriptionMixin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -182,7 +183,9 @@ class _BaseMixSelect(CoordinatorEntity[ResolumeCoordinator], SelectEntity):
         raise NotImplementedError
 
 
-class LayerBlendModeSelect(CoordinatorEntity[ResolumeCoordinator], SelectEntity):
+class LayerBlendModeSelect(
+    ParamSubscriptionMixin, CoordinatorEntity[ResolumeCoordinator], SelectEntity
+):
     _attr_has_entity_name = True
 
     def __init__(

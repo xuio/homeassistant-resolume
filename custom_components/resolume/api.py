@@ -107,6 +107,23 @@ class ResolumeAPI:
             }
         )
 
+    async def async_subscribe_parameter(self, param_id: int) -> None:
+        """Request updates for a specific parameter id."""
+        await self.async_send(
+            {
+                "action": "subscribe",
+                "parameter": f"/parameter/by-id/{param_id}",
+            }
+        )
+
+    async def async_unsubscribe_parameter(self, param_id: int) -> None:
+        await self.async_send(
+            {
+                "action": "unsubscribe",
+                "parameter": f"/parameter/by-id/{param_id}",
+            }
+        )
+
     # ---------------------------------------------------------------------
     # Listener registration
     # ---------------------------------------------------------------------
@@ -161,6 +178,7 @@ class ResolumeAPI:
 
             for listener in list(self._listeners):
                 try:
+                    _LOGGER.debug("Resolume received: %s", data)
                     listener(data)
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Error in Resolume listener")

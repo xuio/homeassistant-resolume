@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from .param_entity import ParamSubscriptionMixin
 
 from .coordinator import ResolumeCoordinator
 from .api import ResolumeAPI
@@ -14,7 +15,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-BRIGHTNESS_FACTOR = 255 / 100  # convert 0-100% to 0-255
+BRIGHTNESS_MAX = 255
 
 
 async def async_setup_entry(
@@ -137,8 +138,12 @@ def _add_composition_light(
 # ---------------------------------------------------------------------------
 
 
-class _ResolumeParamLight(CoordinatorEntity[ResolumeCoordinator], LightEntity):
+class _ResolumeParamLight(
+    ParamSubscriptionMixin, CoordinatorEntity[ResolumeCoordinator], LightEntity
+):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_should_poll = False
 
     def __init__(
         self,
@@ -157,9 +162,12 @@ class _ResolumeParamLight(CoordinatorEntity[ResolumeCoordinator], LightEntity):
         self._attr_has_entity_name = has_entity_name
         self._attr_device_info = {
             "identifiers": {device_id},
-            "name": friendly if not has_entity_name else device_id[1].replace("_", " "),
+            "name": friendly,
             "manufacturer": "Resolume",
         }
+
+        self._value: float | None = None  # cache last known 0..1 value
+        self._pending: float | None = None
 
     # ------------------------------------------------------------------
     @property
@@ -174,23 +182,39 @@ class _ResolumeParamLight(CoordinatorEntity[ResolumeCoordinator], LightEntity):
         value = self._current_value()
         if value is None:
             return None
-        return int(value * BRIGHTNESS_FACTOR)
+        return int(value * BRIGHTNESS_MAX)
 
-    async def async_turn_on(self, **kwargs):  # type: ignore[override]
-        if (b := kwargs.get(ATTR_BRIGHTNESS)) is not None:
-            pct = b / BRIGHTNESS_FACTOR
-        else:
-            pct = 100
-        api: ResolumeAPI = self.coordinator.api  # type: ignore[attr-defined]
-        await api.async_set_parameter(self._param_id, pct / 100)
+    @property
+    def color_mode(self):
+        return ColorMode.BRIGHTNESS
 
-    async def async_turn_off(self, **kwargs):  # type: ignore[override]
-        api: ResolumeAPI = self.coordinator.api  # type: ignore[attr-defined]
-        await api.async_set_parameter(self._param_id, 0)
+    async def async_turn_on(self, **kwargs):
+        level = kwargs.get(ATTR_BRIGHTNESS, BRIGHTNESS_MAX) / BRIGHTNESS_MAX
+        # 1.  update internal state FIRST
+        self._value = level
+        self._attr_is_on = level > 0
+        self._attr_brightness = int(level * BRIGHTNESS_MAX)
+        self.async_write_ha_state()  # 2. push state to UI
+
+        # 3.  then tell Resolume
+        await self.coordinator.resolume_api.async_set_parameter(self._param_id, level)
+
+        self._pending = level
+
+    async def async_turn_off(self, **kwargs):
+        self._value = 0.0
+        self._attr_is_on = False
+        self._attr_brightness = 0
+        self.async_write_ha_state()
+        await self.coordinator.resolume_api.async_set_parameter(self._param_id, 0.0)
+
+        self._pending = 0.0
 
     # ------------------------------------------------------------------
     def _current_value(self):
-        # traverse coordinator data to locate param by id
+        if self._value is not None:
+            return self._value
+
         def search_params(obj):
             if isinstance(obj, dict):
                 if obj.get("id") == self._param_id:
@@ -206,4 +230,9 @@ class _ResolumeParamLight(CoordinatorEntity[ResolumeCoordinator], LightEntity):
                         return res
             return None
 
-        return search_params(self.coordinator.data)
+        val = search_params(self.coordinator.data)
+        if isinstance(val, (int, float)):
+            self._value = float(val)
+        return val
+
+    # ParamSubscriptionMixin handles removal

@@ -27,7 +27,7 @@ async def async_setup_entry(
 
     # Data will arrive via websocket push
 
-    new_entities = _add_clip_entities(coordinator, entities)
+    new_entities = []
 
     # Add layer group clear buttons
     new_entities.extend(_add_layer_group_buttons(coordinator, entities))
@@ -43,43 +43,9 @@ async def async_setup_entry(
 
     @callback
     def _handle_new_data():
-        added = _add_clip_entities(coordinator, entities)
-        if added:
-            async_add_entities(added)
-
-        added_groups = _add_layer_group_buttons(coordinator, entities)
-        if added_groups:
-            async_add_entities(added_groups)
-
-        added_clear = _add_layer_clear_buttons(coordinator, entities)
-        if added_clear:
-            async_add_entities(added_clear)
+        pass
 
     coordinator.async_add_listener(_handle_new_data)
-
-
-@callback
-def _add_clip_entities(
-    coordinator: ResolumeCoordinator, entities: list
-) -> list[ButtonEntity]:
-    new: list[ButtonEntity] = []
-    current_ids = {e.unique_id for e in entities}
-    composition = coordinator.data or {}
-    for index, layer in enumerate(composition.get("layers", []), start=1):
-        for clip in layer.get("clips", []):
-            uid = f"resolume_clip_{clip['id']}_trigger"
-            if uid not in current_ids:
-                ent = ClipTriggerButton(
-                    coordinator,
-                    clip,
-                    layer_id=layer["id"],
-                    layer_index=index,
-                    layer_name=layer.get("name", {}).get("value", f"Layer {index}"),
-                )
-                entities.append(ent)
-                new.append(ent)
-                current_ids.add(uid)
-    return new
 
 
 class ClipTriggerButton(CoordinatorEntity[ResolumeCoordinator], ButtonEntity):
@@ -110,7 +76,25 @@ class ClipTriggerButton(CoordinatorEntity[ResolumeCoordinator], ButtonEntity):
 
     async def async_press(self) -> None:
         api: ResolumeAPI = self.coordinator.api  # type: ignore[attr-defined]
-        await api.async_trigger_clip(self._clip_id, connect=True)
+        # send press and release similar to UI click
+        await api.async_send(
+            {
+                "action": "trigger",
+                "parameter": f"/composition/clips/by-id/{self._clip_id}/connect",
+                "value": True,
+            }
+        )
+
+        async def _release():
+            await api.async_send(
+                {
+                    "action": "trigger",
+                    "parameter": f"/composition/clips/by-id/{self._clip_id}/connect",
+                    "value": False,
+                }
+            )
+
+        self.coordinator.hass.async_create_task(_release())
 
 
 class BpmTapButton(CoordinatorEntity[ResolumeCoordinator], ButtonEntity):

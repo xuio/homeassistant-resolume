@@ -23,22 +23,13 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: ResolumeCoordinator = data["coordinator"]
 
-    entities: list[NumberEntity] = []
-    entities.append(ResolumeBpmNumber(coordinator))
+    entities: list[NumberEntity] = [ResolumeBpmNumber(coordinator)]
 
-    # Keep only BPM and crossfader numbers (others now lights)
-    _add_composition_numbers(coordinator, entities)
+    # Composition-level numbers (master level, audio volume, cross-fader) have
+    # been removed. Only global BPM is exposed now.
 
     if entities:
         async_add_entities(entities)
-
-    @callback
-    def _handle_new_data():
-        added = _add_composition_numbers(coordinator, entities)
-        if added:
-            async_add_entities(added)
-
-    coordinator.async_add_listener(_handle_new_data)
 
 
 class ResolumeBpmNumber(CoordinatorEntity[ResolumeCoordinator], NumberEntity):
