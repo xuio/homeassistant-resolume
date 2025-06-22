@@ -1,0 +1,12 @@
+{
+  "domain": "resolume",
+  "name": "Resolume",
+  "version": "0.0.3",
+  "documentation": "https://github.com/xuio/homeassistant-resolume#readme",
+  "requirements": [
+    "websockets>=11.0"
+  ],
+  "dependencies": [],
+  "codeowners": ["@xuio"],
+  "config_flow": true
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Resolume",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": [
+    "resolume"
+  ],
+  "homeassistant": "2023.8.0"
+}
