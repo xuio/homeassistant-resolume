@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, Coroutine, Dict, List, Optional
 
 import websockets
+import random
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +59,15 @@ class ResolumeAPI:
         assert self._ws is not None
         payload = json.dumps(message)
         _LOGGER.debug("Resolume send: %s", payload)
-        await self._ws.send(payload)
+        try:
+            await self._ws.send(payload)
+        except (websockets.ConnectionClosed, OSError) as exc:
+            # Underlying connection broke between the wait() above and the send().
+            _LOGGER.warning("Send failed, will retry after reconnect: %s", exc)
+            self._connected_event.clear()
+            # Ensure the reconnect loop is running.
+            asyncio.create_task(self.async_connect())
+            raise
 
     # ---------------------------------------------------------------------
     # Convenience helpers used by entities
@@ -153,18 +162,31 @@ class ResolumeAPI:
             try:
                 uri = f"ws://{self._host}:{self._port}/api/v1"
                 _LOGGER.debug("Connecting to Resolume websocket at %s", uri)
-                async with websockets.connect(uri, ping_interval=None) as ws:
+                async with websockets.connect(
+                    uri, ping_interval=20, ping_timeout=20
+                ) as ws:
                     self._ws = ws
                     self._connected_event.set()
                     reconnect_delay = 1  # reset delay on successful connect
                     _LOGGER.info("Connected to Resolume at %s", uri)
-                    await self._read_loop()
+                    try:
+                        await self._read_loop()
+                    finally:
+                        # Ensure we always clear the connected flag when the connection ends –
+                        # even if the websocket closed cleanly without an exception.
+                        self._connected_event.clear()
+                        self._ws = None
             except (OSError, websockets.WebSocketException) as exc:
+                if self._closing:
+                    # If we are shutting down we do not need to log/retry.
+                    break
                 _LOGGER.warning("Resolume websocket connection lost: %s", exc)
                 self._connected_event.clear()
+                self._ws = None
 
-            # schedule reconnect
-            await asyncio.sleep(reconnect_delay)
+            # Add a small random jitter (±10%) to avoid multiple clients reconnecting at once.
+            jitter = reconnect_delay * 0.1 * (random.random() - 0.5)
+            await asyncio.sleep(reconnect_delay + jitter)
             reconnect_delay = min(reconnect_delay * 2, 60)
 
     async def _read_loop(self) -> None:
