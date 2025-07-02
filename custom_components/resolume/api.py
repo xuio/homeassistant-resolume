@@ -24,6 +24,10 @@ class ResolumeAPI:
         self._reconnect_task: Optional[asyncio.Task] = None
         self._listen_task: Optional[asyncio.Task] = None
         self._closing = False
+        # Track all parameter ids we've subscribed to so we can automatically
+        # re-subscribe after the websocket connection is re-established.
+        # Using a set avoids duplicate subscribe calls.
+        self._subscriptions: set[int] = set()
 
     # ---------------------------------------------------------------------
     # Public helpers
@@ -118,6 +122,10 @@ class ResolumeAPI:
 
     async def async_subscribe_parameter(self, param_id: int) -> None:
         """Request updates for a specific parameter id."""
+        # Record the subscription before attempting to send so we do not lose
+        # track of it if the connection drops between now and the send call.
+        self._subscriptions.add(param_id)
+
         await self.async_send(
             {
                 "action": "subscribe",
@@ -132,6 +140,8 @@ class ResolumeAPI:
                 "parameter": f"/parameter/by-id/{param_id}",
             }
         )
+        # Remove from local tracking once we have queued the unsubscribe.
+        self._subscriptions.discard(param_id)
 
     # ---------------------------------------------------------------------
     # Listener registration
@@ -169,6 +179,31 @@ class ResolumeAPI:
                     self._connected_event.set()
                     reconnect_delay = 1  # reset delay on successful connect
                     _LOGGER.info("Connected to Resolume at %s", uri)
+
+                    # Re-subscribe to any parameter ids that were already active
+                    # before the previous disconnect so we continue receiving
+                    # real-time updates after a reconnect.
+                    if self._subscriptions:
+                        _LOGGER.debug(
+                            "Re-subscribing to %d parameter ids after reconnect",
+                            len(self._subscriptions),
+                        )
+                        # We intentionally do not await the individual send
+                        # operations concurrently; doing them in sequence keeps
+                        # the code simple and the number of subscriptions is
+                        # typically modest (< few hundred).
+                        for pid in list(self._subscriptions):
+                            try:
+                                await self.async_subscribe_parameter(pid)
+                            except Exception as exc:  # noqa: BLE001
+                                # If one subscribe fails we log it but continue
+                                # with the others – a failure here is not fatal
+                                # and will be retried on the next reconnect.
+                                _LOGGER.warning(
+                                    "Failed to re-subscribe to parameter %s: %s",
+                                    pid,
+                                    exc,
+                                )
                     try:
                         await self._read_loop()
                     finally:
