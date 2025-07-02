@@ -58,20 +58,52 @@ class ResolumeAPI:
                 pass
 
     async def async_send(self, message: dict[str, Any]) -> None:
-        """Send a raw JSON message over the websocket."""
-        await self._connected_event.wait()
-        assert self._ws is not None
+        """Send a raw JSON message over the websocket.
+
+        If the connection has gone away in between scheduling the send and the
+        actual I/O operation we transparently wait for a reconnect **once** and
+        retry.  The service call therefore succeeds as long as the websocket
+        can be re-established within a reasonable amount of time (10 s).
+        """
+
         payload = json.dumps(message)
-        _LOGGER.debug("Resolume send: %s", payload)
-        try:
-            await self._ws.send(payload)
-        except (websockets.ConnectionClosed, OSError) as exc:
-            # Underlying connection broke between the wait() above and the send().
-            _LOGGER.warning("Send failed, will retry after reconnect: %s", exc)
-            self._connected_event.clear()
-            # Ensure the reconnect loop is running.
-            asyncio.create_task(self.async_connect())
-            raise
+
+        # We try to send at most twice: the initial attempt and – if that fails
+        # because the connection closed – exactly one retry after the
+        # reconnect.  This prevents endless loops while still masking the most
+        # common transient failure.
+        for attempt in (1, 2):
+            await self._connected_event.wait()
+            if self._ws is None:
+                # Should not happen, but guard against race conditions.
+                self._connected_event.clear()
+                if attempt == 2:
+                    raise ConnectionError("Resolume websocket not available")
+                continue
+
+            _LOGGER.debug(
+                "Resolume send%s: %s", " (retry)" if attempt == 2 else "", payload
+            )
+
+            try:
+                await self._ws.send(payload)
+                return  # success
+            except (websockets.ConnectionClosed, OSError) as exc:
+                _LOGGER.warning("Send attempt %s failed: %s", attempt, exc)
+                # Mark disconnected and kick the reconnect loop.
+                self._connected_event.clear()
+                asyncio.create_task(self.async_connect())
+
+                if attempt == 2:
+                    # Exhausted retries – propagate error.
+                    raise
+
+                # Wait a bit for a new connection; give up after 10 seconds so
+                # we don't block Home Assistant's executor forever.
+                try:
+                    await asyncio.wait_for(self._connected_event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    raise ConnectionError("Timed out waiting for Resolume reconnect")
 
     # ---------------------------------------------------------------------
     # Convenience helpers used by entities
