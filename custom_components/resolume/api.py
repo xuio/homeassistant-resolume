@@ -8,6 +8,7 @@ from typing import Any, Coroutine, Dict, List, Optional
 
 import websockets
 import random
+import time
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class ResolumeAPI:
         # re-subscribe after the websocket connection is re-established.
         # Using a set avoids duplicate subscribe calls.
         self._subscriptions: set[int] = set()
+        # Heart-beat / watchdog support
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._last_rx: float = time.monotonic()
 
     # ---------------------------------------------------------------------
     # Public helpers
@@ -42,6 +46,12 @@ class ResolumeAPI:
             self._connect_loop(), name="resolume_ws_listen"
         )
 
+        # Start watchdog that detects stale connections and forces reconnects.
+        if not self._heartbeat_task or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(), name="resolume_ws_heartbeat"
+            )
+
     async def async_close(self) -> None:
         """Close the websocket and cancel tasks."""
         self._closing = True
@@ -49,6 +59,8 @@ class ResolumeAPI:
             self._reconnect_task.cancel()
         if self._listen_task:
             self._listen_task.cancel()
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
         if self._ws:
             # websockets ≥11 returns ClientConnection which exposes .close() but may not have .closed
             try:
@@ -243,6 +255,8 @@ class ResolumeAPI:
                         # even if the websocket closed cleanly without an exception.
                         self._connected_event.clear()
                         self._ws = None
+                        # Reset last_rx so heartbeat does not immediately close new socket
+                        self._last_rx = time.monotonic()
             except (OSError, websockets.WebSocketException) as exc:
                 if self._closing:
                     # If we are shutting down we do not need to log/retry.
@@ -264,6 +278,9 @@ class ResolumeAPI:
             except json.JSONDecodeError:
                 _LOGGER.debug("Ignoring non-json message: %s", message)
                 continue
+
+            # Record timestamp of last received message for heartbeat checks
+            self._last_rx = time.monotonic()
 
             for listener in list(self._listeners):
                 try:
@@ -296,3 +313,42 @@ class ResolumeAPI:
             )
 
         asyncio.create_task(_release())
+
+    # ------------------------------------------------------------------
+    # Heartbeat / watchdog
+    # ------------------------------------------------------------------
+
+    async def _heartbeat_loop(self) -> None:
+        """Periodically check connection liveness and force reconnect if idle.
+
+        Some network failures can silently drop all incoming traffic without the
+        TCP connection actually closing.  In that case the read loop stays
+        alive but we never receive further data.  The websockets ping may not
+        detect this on some proxies/firewalls.  Therefore we monitor the time
+        since the last message and proactively close the socket if it exceeds
+        the *idle_timeout*.
+        """
+
+        idle_timeout = 120  # seconds without data before we assume the link is dead
+        check_interval = 30  # how often to check
+
+        try:
+            while not self._closing:
+                await asyncio.sleep(check_interval)
+
+                if not self._connected_event.is_set() or self._ws is None:
+                    continue  # not connected – nothing to do
+
+                idle = time.monotonic() - self._last_rx
+                if idle > idle_timeout:
+                    _LOGGER.warning(
+                        "Resolume websocket idle for %.1fs (>%ds): forcing reconnect",
+                        idle,
+                        idle_timeout,
+                    )
+                    try:
+                        await self._ws.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        except asyncio.CancelledError:
+            pass
